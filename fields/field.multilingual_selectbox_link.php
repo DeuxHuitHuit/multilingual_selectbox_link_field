@@ -9,7 +9,7 @@
 	require_once(TOOLKIT . '/class.field.php');
 	require_once(EXTENSIONS . '/selectbox_link_field/fields/field.selectbox_link.php');
 	require_once(EXTENSIONS . '/frontend_localisation/lib/class.FLang.php');
-	
+
 	/**
 	 *
 	 * Field class that will represent relationships between entries
@@ -22,26 +22,28 @@
 			parent::__construct();
 			$this->_name = __('Multilingual Select Box Link');
 		}
-		
+
 		protected function getFieldSchema($fieldId) {
 			$lc = FLang::getLangCode();
 
 			if (empty($lc)) {
 				$lc = FLang::getMainLang();
 			}
-			
+
 			try {
-				return Symphony::Database()->fetch("
-					SHOW COLUMNS FROM `tbl_entries_data_$fieldId`
-						WHERE `Field` in ('value-$lc');
-				");
+				return Symphony::Database()
+					->showColumns()
+					->from('tbl_entries_data_' . $fieldId)
+					->where(['Field' => ['in' => ['value-' . $lc]]])
+					->execute()
+					->rows();
 			}
 			catch (Exception $ex) {
 				// bail out
 			}
 			return parent::getFieldSchema($fieldId);
 		}
-		
+
 		public function fetchIDfromValue($value) {
 			$id = null;
 			$related_field_ids = $this->get('related_field_id');
@@ -51,22 +53,23 @@
 			if (empty($lc)) {
 				$lc = FLang::getMainLang();
 			}
-			
+
 			$value = Lang::createHandle($value);
-			
+
 			$try_parent = false;
-			
+
 			foreach($related_field_ids as $related_field_id) {
 				try {
-					$return = Symphony::Database()->fetchCol("id", sprintf("
-						SELECT
-							`entry_id` as `id`
-						FROM
-							`tbl_entries_data_%d`
-						WHERE
-							`handle` = '%s' OR `handle-{$lc}` = '%s'
-						LIMIT 1", $related_field_id, $value, $value
-					));
+					$return = Symphony::Database()
+						->select(['entry_id' => 'id'])
+						->from('tbl_entries_data_' . $related_field_id)
+						->where(['or' => [
+							['handle' => $value],
+							['handle-' . $lc => $value],
+						]])
+						->limit(1)
+						->execute()
+						->column('id');
 
 					// Skipping returns wrong results when doing an
 					// AND operation, return 0 instead.
@@ -80,57 +83,68 @@
 					$try_parent = true;
 				}
 			}
-			
+
 			if ($try_parent) {
 				return parent::fetchIDfromValue($value);
 			}
 
 			return (is_null($id)) ? 0 : (int)$id;
 		}
-		
-		public function fetchAssociatedEntrySearchValue($data, $field_id=NULL, $parent_entry_id=NULL){
+
+		public function fetchAssociatedEntrySearchValue($data, $field_id = null, $parent_entry_id = null){
 			// We dont care about $data, but instead $parent_entry_id
 			if(!is_null($parent_entry_id)) return $parent_entry_id;
 
 			if(!is_array($data)) return $data;
-			
-			$handle = addslashes($data['handle']);
-			
+
+			$handle = $data['handle'];
+
 			$try_parent = false;
-			
-			$searchvalue = array();
+
+			$searchvalue = null;
 
 			try {
-				$searchvalue = Symphony::Database()->fetchRow(0, sprintf("
-					SELECT `entry_id` FROM `tbl_entries_data_%d`
-					WHERE `handle` = '%s' OR `handle-{$lc}` = '%s'
-					LIMIT 1",
-					$field_id, $handle, $handle
-				));
+				$searchvalue = Symphony::Database()
+					->select(['entry_id'])
+					->from('tbl_entries_data_' . $field_id)
+					->where(['or' => [
+						['handle' => $handle],
+						['handle-' . $lc => $handle],
+					]])
+					->limit(1)
+					->execute()
+					->variable('entry_id');
 			} catch (Exception $ex) {
 				// Try the parent since this would normally be the case when a handle
 				// column doesn't exist!
 				$try_parent = true;
 			}
-			
+
 			if ($try_parent) {
 				return parent::fetchAssociatedEntrySearchValue($data, $field_id, $parent_entry_id);
 			}
 
-			return $searchvalue['entry_id'];
+			return $searchvalue;
 		}
-		
+
 		private static function startsWith($haystack, $needle) {
 			// search backwards starting from haystack length characters from the end
-			return $needle === "" || strrpos($haystack, $needle, -strlen($haystack)) !== FALSE;
+			return $needle === "" || strrpos($haystack, $needle, -strlen($haystack)) !== false;
 		}
-		
+
 		protected function findRelatedValues(array $relation_id = array()) {
 			$relation_data = parent::findRelatedValues($relation_id);
 			if (is_array($relation_data)) {
 				foreach ($relation_data as $r => $relation) {
-					$e = EntryManager::fetch($relation['id']);
-					$ed = $e[0]->getData();
+					$section_id = SectionManager::fetchIDFromHandle($relation['section_handle']);
+					$e = (new EntryManager)
+						->select()
+						->entry($relation['id'])
+						->section($section_id)
+						->includeAllFields()
+						->execute()
+						->next();
+					$ed = $e->getData();
 					foreach ($this->get('related_field_id') as $fieldId) {
 						if (is_array($ed[$fieldId])) {
 							foreach ($ed[$fieldId] as $key => $value) {
@@ -144,7 +158,7 @@
 			}
 			return $relation_data;
 		}
-		
+
 		public function prepareTextValue($data, $entry_id = null) {
 			if(!is_array($data) || (is_array($data) && !isset($data['relation_id']))) {
 				return parent::prepareTextValue($data, $entry_id);
@@ -160,7 +174,7 @@
 			if (empty($lc)) {
 				$lc = FLang::getMainLang();
 			}
-			
+
 			$label = '';
 			foreach($result as $item){
 				if (isset($item['value-' . $lc])) {
@@ -170,7 +184,7 @@
 				}
 				$label .= ', ';
 			}
-			
+
 			return trim($label, ', ');
 		}
 	}
